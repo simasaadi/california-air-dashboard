@@ -3,10 +3,9 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import plotly.express as px
 from pathlib import Path
 
-# ---------------- Page setup (no overlap) ----------------
+# ---------- Page ----------
 st.set_page_config(page_title="California Air Quality — Scientific Animated", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
 <style>
@@ -17,7 +16,7 @@ hr{margin:0.2rem 0 0.8rem 0; border:1px solid #999;}
 """, unsafe_allow_html=True)
 st.markdown("<h1>California Air Quality — Scientific Animated Dashboard</h1><hr/>", unsafe_allow_html=True)
 
-# ---------------- Data loading ----------------
+# ---------- Data ----------
 def find_csv():
     p = Path("California_NO2_CO_Combined.csv")
     if p.exists(): return str(p)
@@ -39,7 +38,6 @@ if src == "Upload a CSV":
 else:
     df = pd.read_csv(path)
 
-# Validate + prepare
 req = ["Date","Pollutant","Concentration","County","Site Latitude","Site Longitude","Site ID"]
 missing = [c for c in req if c not in df.columns]
 if missing:
@@ -68,7 +66,7 @@ wide = (df.pivot_table(
 wide["MonthLabel"] = wide["Date"].dt.to_period("M").astype(str)
 months = sorted(wide["MonthLabel"].unique())
 
-# Precompute — county monthly
+# County monthly (for map)
 county_month = (wide.groupby(["County","MonthLabel"], as_index=False)
                     .agg(lat=("Site Latitude","mean"),
                          lon=("Site Longitude","mean"),
@@ -78,7 +76,7 @@ county_month = (wide.groupby(["County","MonthLabel"], as_index=False)
                          CO_sd=("CO","std"),
                          n=("Site ID","nunique")))
 
-# Regional buckets
+# Regions
 county_lat = wide.groupby("County", as_index=False)["Site Latitude"].mean().rename(columns={"Site Latitude":"centroid_lat"})
 q1, q2 = county_lat["centroid_lat"].quantile([0.33, 0.66]).tolist()
 def region_from_lat(v):
@@ -92,9 +90,15 @@ reg_series = (wide.merge(county_lat[["County","Region"]], on="County", how="left
 regions = ["North","Central","South"]
 corr_vars = ["NO2","CO","Site Latitude","Site Longitude"]
 
-# Helper: per-month derived tables
+# Pick the trend pollutant with more variance across months
+no2_var = reg_series.groupby("MonthLabel")["NO2"].mean().var()
+co_var  = reg_series.groupby("MonthLabel")["CO"].mean().var()
+trend_pol = "CO" if (co_var > no2_var) else "NO2"
+trend_title = f"Regional Trends ({'CO' if trend_pol=='CO' else 'NO₂'})"
+
+# Helper
 def per_month_tables(m):
-    # map table
+    # map composite + size
     cm = county_month[county_month["MonthLabel"]==m].copy()
     if len(cm):
         cm["rNO2"] = cm["NO2"].rank(pct=True)
@@ -107,14 +111,18 @@ def per_month_tables(m):
     sub = wide[wide["MonthLabel"]==m][corr_vars].dropna()
     C = sub.corr().values if len(sub)>=3 else np.zeros((4,4))
 
-    # regional (up to month m)
+    # regional (cumulative) + 3-month moving average
     months_to_plot = [x for x in months if x <= m]
     rs = reg_series[reg_series["MonthLabel"].isin(months_to_plot)].copy()
     rs["_date"] = pd.to_datetime(rs["MonthLabel"]+"-01")
+    rs.sort_values(["Region","_date"], inplace=True)
+    for reg in regions:
+        mask = rs["Region"]==reg
+        rs.loc[mask, trend_pol+"_SMA3"] = rs.loc[mask, trend_pol].rolling(3, min_periods=1).mean()
 
-    # 3D surface bins
+    # 3D surface
     S = wide[wide["MonthLabel"]==m][["NO2","CO"]].dropna()
-    bins = 45
+    bins = 35
     if len(S) < 50:
         H = np.zeros((bins, bins))
         xe = np.linspace(0,1,bins+1); ye = np.linspace(0,1,bins+1)
@@ -126,90 +134,87 @@ def per_month_tables(m):
     xmid = 0.5*(xe[:-1] + xe[1:]); ymid = 0.5*(ye[:-1] + ye[1:])
     return cm, C, rs, xmid, ymid, H.T
 
-# ---------------- One Plotly figure with subplots & frames ----------------
+# ---------- One figure with 2×2 subplots ----------
 fig = make_subplots(
     rows=2, cols=2,
     specs=[[{"type":"mapbox"}, {"type":"heatmap"}],
            [{"type":"xy"},      {"type":"surface"}]],
     column_widths=[0.5, 0.5], row_heights=[0.5, 0.5],
-    horizontal_spacing=0.08, vertical_spacing=0.1,
+    horizontal_spacing=0.08, vertical_spacing=0.12,
     subplot_titles=("Composite Index — Map", "Correlation Heatmap",
-                    "Regional Trends (NO₂)", "3D Exposure Surface")
+                    trend_title, "3D Exposure Surface")
 )
 
-# Initial month
 m0 = months[0]
 cm0, C0, rs0, x0, y0, Z0 = per_month_tables(m0)
 
-# --- Map (r1c1)
+# Map (no legend/scale to keep page clean)
 if len(cm0):
     fig.add_scattermapbox(
         lat=cm0["lat"], lon=cm0["lon"],
-        mode="markers",
-        marker=dict(size=cm0["size"], color=cm0["Composite"], colorscale="Blues", showscale=True, colorbar=dict(title="Composite")),
+        mode="markers", showlegend=False,
+        marker=dict(size=cm0["size"], color=cm0["Composite"], colorscale="Blues", showscale=False),
         text=cm0["County"],
-        hovertemplate="County=%{text}<br>NO₂=%{customdata[0]:.2f}<br>CO=%{customdata[1]:.2f}<extra></extra>",
         customdata=np.c_[cm0["NO2"], cm0["CO"]],
+        hovertemplate="County=%{text}<br>NO₂=%{customdata[0]:.2f}<br>CO=%{customdata[1]:.2f}<extra></extra>",
         row=1, col=1
     )
 fig.update_mapboxes(row=1, col=1, style="open-street-map", center=dict(lat=36.5, lon=-119.5), zoom=4.5)
 
-# --- Correlation (r1c2)
-fig.add_heatmap(z=C0, x=corr_vars, y=corr_vars, zmin=-1, zmax=1, coloraxis="coloraxis", row=1, col=2)
-fig.update_layout(coloraxis=dict(colorscale="Blues", colorbar=dict(title="r")))
+# Correlation heatmap (keep its colorbar)
+fig.add_heatmap(z=C0, x=corr_vars, y=corr_vars, zmin=-1, zmax=1,
+                coloraxis="coloraxis", showscale=True, row=1, col=2)
+fig.update_layout(coloraxis=dict(colorscale="Blues", colorbar=dict(title="r", y=0.9)))
 
-# --- Regional lines (r2c1)
+# Regional lines (SMA3 only; clean legend)
 for reg in regions:
     sub = rs0[rs0["Region"]==reg].sort_values("_date")
-    fig.add_scatter(x=sub["_date"], y=sub["NO2"], mode="lines+markers", name=reg, row=2, col=1)
+    fig.add_scatter(x=sub["_date"], y=sub[f"{trend_pol}_SMA3"], mode="lines",
+                    name=reg, row=2, col=1)
 
-# --- 3D surface (r2c2)
-fig.add_surface(z=Z0, x=x0, y=y0, showscale=True, row=2, col=2)
+# 3D surface (no colorbar to reduce clutter)
+fig.add_surface(z=Z0, x=x0, y=y0, showscale=False, row=2, col=2)
 
-# Layout
 fig.update_layout(
-    height=880, margin=dict(l=10, r=10, t=60, b=10),
-    scene=dict(xaxis_title="NO₂", yaxis_title="CO", zaxis_title="Density"),  # surface axes
-    legend=dict(orientation="h", yanchor="bottom", y=0.02, xanchor="left", x=0.05),
-    title=dict(text=f"Month: {m0}", x=0.5, y=0.98)
+    height=860, margin=dict(l=10, r=10, t=60, b=70),
+    scene=dict(xaxis_title="NO₂", yaxis_title="CO", zaxis_title="Density"),
+    legend=dict(orientation="h", yanchor="bottom", y=0.07, xanchor="left", x=0.05),
+    title=dict(text=f"Month: {m0}", x=0.5, y=0.99)
 )
 
-# ---------------- Build frames (one per month) ----------------
+# ---------- Frames (sync all subplots) ----------
 frames = []
 for m in months:
     cm, C, rs, xmid, ymid, Z = per_month_tables(m)
+    df_list = []
 
-    data_frame = []
-
-    # Map (trace 0)
+    # Map
     if len(cm):
-        data_frame.append(go.Scattermapbox(
-            lat=cm["lat"], lon=cm["lon"],
-            mode="markers",
-            marker=dict(size=cm["size"], color=cm["Composite"], colorscale="Blues"),
-            text=cm["County"],
-            customdata=np.c_[cm["NO2"], cm["CO"]],
+        df_list.append(go.Scattermapbox(
+            lat=cm["lat"], lon=cm["lon"], mode="markers", showlegend=False,
+            marker=dict(size=cm["size"], color=cm["Composite"], colorscale="Blues", showscale=False),
+            text=cm["County"], customdata=np.c_[cm["NO2"], cm["CO"]],
             hovertemplate="County=%{text}<br>NO₂=%{customdata[0]:.2f}<br>CO=%{customdata[1]:.2f}<extra></extra>",
         ))
     else:
-        data_frame.append(go.Scattermapbox(lat=[], lon=[]))
+        df_list.append(go.Scattermapbox(lat=[], lon=[], showlegend=False))
 
-    # Heatmap (trace 1)
-    data_frame.append(go.Heatmap(z=C, x=corr_vars, y=corr_vars, zmin=-1, zmax=1, coloraxis="coloraxis"))
+    # Heatmap
+    df_list.append(go.Heatmap(z=C, x=corr_vars, y=corr_vars, zmin=-1, zmax=1, coloraxis="coloraxis", showscale=True))
 
-    # Regional lines (traces 2-4)
+    # Regional lines (3 traces)
     for reg in regions:
         sub = rs[rs["Region"]==reg].sort_values("_date")
-        data_frame.append(go.Scatter(x=sub["_date"], y=sub["NO2"], mode="lines+markers", name=reg))
+        df_list.append(go.Scatter(x=sub["_date"], y=sub[f"{trend_pol}_SMA3"], mode="lines", name=reg, showlegend=(m==m0)))
 
-    # Surface (trace 5)
-    data_frame.append(go.Surface(z=Z, x=xmid, y=ymid, showscale=True))
+    # Surface
+    df_list.append(go.Surface(z=Z, x=xmid, y=ymid, showscale=False))
 
-    frames.append(go.Frame(name=m, data=data_frame, layout=go.Layout(title=dict(text=f"Month: {m}", x=0.5, y=0.98))))
+    frames.append(go.Frame(name=m, data=df_list, layout=go.Layout(title=dict(text=f"Month: {m}", x=0.5, y=0.99))))
 
 fig.frames = frames
 
-# Single Play/Pause + slider
+# ---------- Controls placed neatly BELOW the figure ----------
 fig.update_layout(
     updatemenus=[{
         "type":"buttons",
@@ -219,12 +224,13 @@ fig.update_layout(
             {"label":"Pause","method":"animate",
              "args":[[None], {"mode":"immediate","frame":{"duration":0,"redraw":False},"transition":{"duration":0}}]}
         ],
-        "x":0.02, "y":0.99, "xanchor":"left", "yanchor":"top"
+        "direction":"left", "x":0.01, "y":0.02, "xanchor":"left", "yanchor":"bottom",
+        "pad":{"r":10,"t":30}
     }],
     sliders=[{
-        "active":0, "x":0.12, "y":0.99, "len":0.76,
+        "active":0, "x":0.14, "y":0.02, "len":0.75,  # bottom center
         "currentvalue":{"prefix":"Month: "},
-        "pad":{"t":0, "b":0},
+        "pad":{"t":40, "b":0},
         "steps":[{"args":[[m], {"frame":{"duration":0,"redraw":True}, "transition":{"duration":0}}],
                   "label":m, "method":"animate"} for m in months]
     }]
