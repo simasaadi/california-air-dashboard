@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -14,27 +15,32 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Tighten padding & header spacing
+# Clean centered title + divider
+st.markdown("""
+    <h1 style='text-align:center; margin-bottom:0.3rem;'>
+        California Air Quality — Scientific Animated Dashboard
+    </h1>
+    <hr style='margin-top:0.2rem; margin-bottom:0.6rem; border:1px solid #999;'/>
+""", unsafe_allow_html=True)
+
+# Tighten padding
 st.markdown("""
 <style>
-.block-container {padding-top:0.6rem; padding-bottom:0.6rem; max-width:1400px;}
+.block-container {padding-top:0.4rem; padding-bottom:0.6rem; max-width:1400px;}
 h1, h2, h3 { margin:0.4rem 0 0.6rem 0; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h2 style='margin-top:0'>California Air Quality — Scientific Animated Dashboard</h2>",
-            unsafe_allow_html=True)
-
-# Figure heights (tune if needed to fit your screen)
-MAP_H = 420     # animated map
-FIG_H = 340     # correlation / regional / 3D
+# Figure heights (tune for your screen)
+MAP_H = 420
+FIG_H = 340
 
 # =======================
 # Data loader (cached)
 # =======================
 @st.cache_data(show_spinner=False)
-def load_data(file):
-    df = pd.read_csv(file)
+def load_data(file_like):
+    df = pd.read_csv(file_like)
     required = ["Date","Pollutant","Concentration","County","Site Latitude","Site Longitude","Site ID"]
     missing = [c for c in required if c not in df.columns]
     if missing:
@@ -45,19 +51,35 @@ def load_data(file):
     return df
 
 # =======================
-# Sidebar (optional data input)
+# Find a CSV automatically (or fall back to uploader)
 # =======================
+def find_csv():
+    # 1) Prefer the canonical file name
+    cand = Path("California_NO2_CO_Combined.csv")
+    if cand.exists():
+        return cand
+    # 2) otherwise: first CSV in repo root or in ./data
+    for p in list(Path(".").glob("*.csv")) + list(Path("data").glob("*.csv")):
+        return p
+    return None
+
 st.sidebar.header("Data")
-use_uploader = st.sidebar.checkbox("Upload a CSV instead", value=False)
-if use_uploader:
-    up = st.sidebar.file_uploader("Upload a CSV", type=["csv"])
-    if up is not None:
-        df = load_data(up)
-    else:
-        st.stop()
+auto_csv = find_csv()
+mode = st.sidebar.selectbox(
+    "Choose data source",
+    ["Auto-detect CSV" + (f" ({auto_csv.name})" if auto_csv else " (not found)"),
+     "Upload a CSV"],
+    index=0 if auto_csv else 1
+)
+
+if mode.startswith("Auto-detect") and auto_csv:
+    df = load_data(str(auto_csv))
 else:
-    # Default: CSV in repo root with this exact name
-    df = load_data("California_NO2_CO_Combined.csv")
+    up = st.sidebar.file_uploader("Upload a CSV", type=["csv"])
+    if up is None:
+        st.warning("No CSV found. Please upload a CSV to continue.")
+        st.stop()
+    df = load_data(up)
 
 st.sidebar.header("Animation/Data Filters")
 min_obs = st.sidebar.slider("Min observations per month (for animations)", 200, 2000, 800, 50)
@@ -72,8 +94,7 @@ wide = (
         columns="Pollutant",
         values="Concentration",
         aggfunc="mean"
-    )
-    .reset_index()
+    ).reset_index()
 )
 wide["MonthLabel"] = wide["Date"].dt.to_period("M").astype(str)
 months_sorted = sorted(wide["MonthLabel"].unique())
@@ -90,7 +111,7 @@ if "play" not in st.session_state:
 if "month_idx" not in st.session_state:
     st.session_state.month_idx = 0
 if "speed_ms" not in st.session_state:
-    st.session_state.speed_ms = 900  # ms between frames
+    st.session_state.speed_ms = 900  # ms
 
 def toggle_play():
     st.session_state.play = not st.session_state.play
@@ -111,11 +132,14 @@ with c2:
         label_visibility="collapsed",
     )
 with c3:
-    speed = st.select_slider("Speed", options=[300, 600, 900, 1200, 1500], value=st.session_state.speed_ms,
-                             format_func=lambda x: f"{int(x/1000)}s", label_visibility="collapsed")
+    speed = st.select_slider("Speed", options=[300, 600, 900, 1200, 1500],
+                             value=st.session_state.speed_ms,
+                             format_func=lambda x: f"{int(x/1000)}s",
+                             label_visibility="collapsed")
     st.session_state.speed_ms = speed
 with c4:
-    st.markdown(f"<div style='text-align:right;padding-top:8px'><b>{months_sorted[st.session_state.month_idx]}</b></div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='text-align:right;padding-top:8px'><b>{months_sorted[st.session_state.month_idx]}</b></div>",
+                unsafe_allow_html=True)
 
 # Auto-advance when playing
 if st.session_state.play:
@@ -127,10 +151,9 @@ if st.session_state.play:
 M = months_sorted[st.session_state.month_idx]
 
 # ===============================
-# Precompute pieces needed per-month
+# Build the month-specific data
 # ===============================
-
-# 1) Composite Map data (for month M ONLY)
+# 1) Composite Map data (month M)
 county_month_all = (
     wide.groupby(["County","MonthLabel"], as_index=False)
         .agg(lat=("Site Latitude","mean"),
@@ -142,9 +165,7 @@ county_month_all = (
              n=("Site ID","nunique"))
 )
 cm = county_month_all[county_month_all["MonthLabel"]==M].copy()
-# Composite & size
 if not cm.empty:
-    # Rank within month only
     cm["rNO2"] = cm["NO2"].rank(pct=True)
     cm["rCO"]  = cm["CO"].rank(pct=True)
     cm["Composite"] = 100.0*(0.5*cm["rNO2"] + 0.5*cm["rCO"])
@@ -159,7 +180,7 @@ if len(sub_corr) < 3:
 else:
     C_M = sub_corr.corr().values
 
-# 3) Regional trends up to current month (cumulative story)
+# 3) Regional trends up to current month (cumulative)
 county_lat = wide.groupby("County", as_index=False)["Site Latitude"].mean().rename(columns={"Site Latitude":"centroid_lat"})
 q1, q2 = county_lat["centroid_lat"].quantile([0.33, 0.66]).tolist()
 def region_from_lat(lat):
@@ -173,7 +194,6 @@ cm_region_all = (
         .groupby(["Region","MonthLabel"], as_index=False)
         .agg(NO2=("NO2","mean"), CO=("CO","mean"))
 )
-# keep months <= M
 months_to_plot = [m for m in months_sorted if m <= M]
 cm_region = cm_region_all[cm_region_all["MonthLabel"].isin(months_to_plot)].copy()
 cm_region["_date"] = pd.to_datetime(cm_region["MonthLabel"]+"-01")
@@ -197,7 +217,6 @@ xmid = 0.5*(xe[:-1] + xe[1:]); ymid = 0.5*(ye[:-1] + ye[1:])
 # ===============================
 # Build figures (no per-fig animations)
 # ===============================
-
 # Map
 if cm.empty:
     fig_map = go.Figure()
@@ -217,7 +236,7 @@ else:
 fig_corr = go.Figure(data=[go.Heatmap(z=C_M, x=corr_vars, y=corr_vars, zmin=-1, zmax=1, colorbar=dict(title="r"))])
 fig_corr.update_layout(height=FIG_H, margin=dict(l=5,r=5,t=30,b=0))
 
-# Regional lines (NO2 by default with toggle)
+# Regional lines (NO2)
 regions = ["North","Central","South"]
 fig_regions = go.Figure()
 for reg in regions:
