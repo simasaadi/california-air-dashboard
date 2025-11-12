@@ -6,7 +6,8 @@ from plotly.subplots import make_subplots
 from pathlib import Path
 
 # ---------- Page ----------
-st.set_page_config(page_title="California Air Quality — Scientific Animated", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="California Air Quality — Scientific Animated",
+                   layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
 <style>
 .block-container{padding-top:0.6rem; padding-bottom:0.6rem; max-width:1400px;}
@@ -14,7 +15,8 @@ h1{margin:0.2rem 0 0.6rem 0; text-align:center;}
 hr{margin:0.2rem 0 0.8rem 0; border:1px solid #999;}
 </style>
 """, unsafe_allow_html=True)
-st.markdown("<h1>California Air Quality — Scientific Animated Dashboard</h1><hr/>", unsafe_allow_html=True)
+st.markdown("<h1>California Air Quality — Scientific Animated Dashboard</h1><hr/>",
+            unsafe_allow_html=True)
 
 # ---------- Data ----------
 def find_csv():
@@ -77,24 +79,47 @@ county_month = (wide.groupby(["County","MonthLabel"], as_index=False)
                          n=("Site ID","nunique")))
 
 # Regions
-county_lat = wide.groupby("County", as_index=False)["Site Latitude"].mean().rename(columns={"Site Latitude":"centroid_lat"})
+regions = ["North","Central","South"]
+county_lat = (wide.groupby("County", as_index=False)["Site Latitude"]
+                 .mean().rename(columns={"Site Latitude":"centroid_lat"}))
 q1, q2 = county_lat["centroid_lat"].quantile([0.33, 0.66]).tolist()
 def region_from_lat(v):
     if v <= q1: return "South"
     if v <= q2: return "Central"
     return "North"
 county_lat["Region"] = county_lat["centroid_lat"].apply(region_from_lat)
+
 reg_series = (wide.merge(county_lat[["County","Region"]], on="County", how="left")
                  .groupby(["Region","MonthLabel"], as_index=False)
                  .agg(NO2=("NO2","mean"), CO=("CO","mean")))
-regions = ["North","Central","South"]
-corr_vars = ["NO2","CO","Site Latitude","Site Longitude"]
 
-# Pick the trend pollutant with more variance across months
-no2_var = reg_series.groupby("MonthLabel")["NO2"].mean().var()
-co_var  = reg_series.groupby("MonthLabel")["CO"].mean().var()
-trend_pol = "CO" if (co_var > no2_var) else "NO2"
-trend_title = f"Regional Trends ({'CO' if trend_pol=='CO' else 'NO₂'})"
+# Regional composite index (percentile blend) to create more dynamic trends
+def add_composite(df_reg):
+    df_reg = df_reg.copy()
+    # rank by month to 0..1 then 0..100
+    def _pct(s): return s.rank(pct=True)
+    tmp = df_reg.groupby("MonthLabel").apply(
+        lambda g: pd.DataFrame({
+            "Region": g["Region"].values,
+            "MonthLabel": g["MonthLabel"].values,
+            "NO2p": _pct(g["NO2"]).values,
+            "COp":  _pct(g["CO"]).values
+        })
+    ).reset_index(drop=True)
+    tmp["Composite"] = 100*(0.5*tmp["NO2p"] + 0.5*tmp["COp"])
+    return df_reg.merge(tmp[["Region","MonthLabel","Composite"]],
+                        on=["Region","MonthLabel"], how="left")
+
+reg_series = add_composite(reg_series)
+
+# Choose the most variable series for trend panel
+v_no2 = reg_series.groupby("MonthLabel")["NO2"].mean().var()
+v_co  = reg_series.groupby("MonthLabel")["CO"].mean().var()
+v_ci  = reg_series.groupby("MonthLabel")["Composite"].mean().var()
+trend_key = max([("NO2", v_no2), ("CO", v_co), ("Composite", v_ci)], key=lambda x: x[1])[0]
+trend_title = f"Regional Trends ({'NO₂' if trend_key=='NO2' else ('CO' if trend_key=='CO' else 'Composite Index')})"
+
+corr_vars = ["NO2","CO","Site Latitude","Site Longitude"]
 
 # Helper
 def per_month_tables(m):
@@ -118,7 +143,7 @@ def per_month_tables(m):
     rs.sort_values(["Region","_date"], inplace=True)
     for reg in regions:
         mask = rs["Region"]==reg
-        rs.loc[mask, trend_pol+"_SMA3"] = rs.loc[mask, trend_pol].rolling(3, min_periods=1).mean()
+        rs.loc[mask, trend_key+"_SMA3"] = rs.loc[mask, trend_key].rolling(3, min_periods=1).mean()
 
     # 3D surface
     S = wide[wide["MonthLabel"]==m][["NO2","CO"]].dropna()
@@ -148,7 +173,7 @@ fig = make_subplots(
 m0 = months[0]
 cm0, C0, rs0, x0, y0, Z0 = per_month_tables(m0)
 
-# Map (no legend/scale to keep page clean)
+# Map
 if len(cm0):
     fig.add_scattermapbox(
         lat=cm0["lat"], lon=cm0["lon"],
@@ -159,20 +184,24 @@ if len(cm0):
         hovertemplate="County=%{text}<br>NO₂=%{customdata[0]:.2f}<br>CO=%{customdata[1]:.2f}<extra></extra>",
         row=1, col=1
     )
-fig.update_mapboxes(row=1, col=1, style="open-street-map", center=dict(lat=36.5, lon=-119.5), zoom=4.5)
+fig.update_mapboxes(row=1, col=1, style="open-street-map",
+                    center=dict(lat=36.5, lon=-119.5), zoom=4.5)
 
-# Correlation heatmap (keep its colorbar)
+# Correlation heatmap — IMPORTANT: pin to x2/y2 and use a coloraxis
 fig.add_heatmap(z=C0, x=corr_vars, y=corr_vars, zmin=-1, zmax=1,
                 coloraxis="coloraxis", showscale=True, row=1, col=2)
-fig.update_layout(coloraxis=dict(colorscale="Blues", colorbar=dict(title="r", y=0.9)))
+fig.update_layout(coloraxis=dict(colorscale="Blues",
+                                 colorbar=dict(title="r", y=0.9)))
+fig.update_xaxes(type="category", fixedrange=True, row=1, col=2)
+fig.update_yaxes(type="category", fixedrange=True, row=1, col=2)
 
-# Regional lines (SMA3 only; clean legend)
+# Regional lines (SMA3)
 for reg in regions:
     sub = rs0[rs0["Region"]==reg].sort_values("_date")
-    fig.add_scatter(x=sub["_date"], y=sub[f"{trend_pol}_SMA3"], mode="lines",
+    fig.add_scatter(x=sub["_date"], y=sub[f"{trend_key}_SMA3"], mode="lines",
                     name=reg, row=2, col=1)
 
-# 3D surface (no colorbar to reduce clutter)
+# 3D surface
 fig.add_surface(z=Z0, x=x0, y=y0, showscale=False, row=2, col=2)
 
 fig.update_layout(
@@ -186,52 +215,66 @@ fig.update_layout(
 frames = []
 for m in months:
     cm, C, rs, xmid, ymid, Z = per_month_tables(m)
-    df_list = []
+    data_traces = []
 
-    # Map
+    # Map (keep same trace index)
     if len(cm):
-        df_list.append(go.Scattermapbox(
+        data_traces.append(go.Scattermapbox(
             lat=cm["lat"], lon=cm["lon"], mode="markers", showlegend=False,
             marker=dict(size=cm["size"], color=cm["Composite"], colorscale="Blues", showscale=False),
             text=cm["County"], customdata=np.c_[cm["NO2"], cm["CO"]],
-            hovertemplate="County=%{text}<br>NO₂=%{customdata[0]:.2f}<br>CO=%{customdata[1]:.2f}<extra></extra>",
+            hovertemplate="County=%{text}<br>NO₂=%{customdata[0]:.2f}<br>CO=%{customdata[1]:.2f}<extra></extra>"
         ))
     else:
-        df_list.append(go.Scattermapbox(lat=[], lon=[], showlegend=False))
+        data_traces.append(go.Scattermapbox(lat=[], lon=[], showlegend=False))
 
-    # Heatmap
-    df_list.append(go.Heatmap(z=C, x=corr_vars, y=corr_vars, zmin=-1, zmax=1, coloraxis="coloraxis", showscale=True))
+    # Heatmap — PIN to x2/y2, and showscale=False in frames to avoid relayout
+    data_traces.append(go.Heatmap(
+        z=C, x=corr_vars, y=corr_vars,
+        zmin=-1, zmax=1, coloraxis="coloraxis", showscale=False
+    ))
 
     # Regional lines (3 traces)
     for reg in regions:
         sub = rs[rs["Region"]==reg].sort_values("_date")
-        df_list.append(go.Scatter(x=sub["_date"], y=sub[f"{trend_pol}_SMA3"], mode="lines", name=reg, showlegend=(m==m0)))
+        data_traces.append(go.Scatter(
+            x=sub["_date"], y=sub[f"{trend_key}_SMA3"], mode="lines", showlegend=False
+        ))
 
     # Surface
-    df_list.append(go.Surface(z=Z, x=xmid, y=ymid, showscale=False))
+    data_traces.append(go.Surface(z=Z, x=xmid, y=ymid, showscale=False))
 
-    frames.append(go.Frame(name=m, data=df_list, layout=go.Layout(title=dict(text=f"Month: {m}", x=0.5, y=0.99))))
+    frames.append(go.Frame(
+        name=m,
+        data=data_traces,
+        layout=go.Layout(title=dict(text=f"Month: {m}", x=0.5, y=0.99))
+    ))
 
 fig.frames = frames
 
-# ---------- Controls placed neatly BELOW the figure ----------
+# ---------- Controls (below figure) ----------
 fig.update_layout(
     updatemenus=[{
         "type":"buttons",
         "buttons":[
             {"label":"Play","method":"animate",
-             "args":[None, {"fromcurrent":True, "frame":{"duration":600, "redraw":True}, "transition":{"duration":200}}]},
+             "args":[None, {"fromcurrent":True,
+                            "frame":{"duration":600, "redraw":False},
+                            "transition":{"duration":200}}]},
             {"label":"Pause","method":"animate",
-             "args":[[None], {"mode":"immediate","frame":{"duration":0,"redraw":False},"transition":{"duration":0}}]}
+             "args":[[None], {"mode":"immediate",
+                              "frame":{"duration":0, "redraw":False},
+                              "transition":{"duration":0}}]}
         ],
         "direction":"left", "x":0.01, "y":0.02, "xanchor":"left", "yanchor":"bottom",
         "pad":{"r":10,"t":30}
     }],
     sliders=[{
-        "active":0, "x":0.14, "y":0.02, "len":0.75,  # bottom center
+        "active":0, "x":0.14, "y":0.02, "len":0.75,
         "currentvalue":{"prefix":"Month: "},
         "pad":{"t":40, "b":0},
-        "steps":[{"args":[[m], {"frame":{"duration":0,"redraw":True}, "transition":{"duration":0}}],
+        "steps":[{"args":[[m], {"frame":{"duration":0, "redraw":False},
+                                 "transition":{"duration":0}}],
                   "label":m, "method":"animate"} for m in months]
     }]
 )
