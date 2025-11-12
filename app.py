@@ -14,15 +14,8 @@ st.set_page_config(
 )
 
 # Tighten padding & header spacing
-st.markdown("""
-<style>
-.block-container {padding-top:0.6rem; padding-bottom:0.6rem; max-width:1400px;}
-h1, h2, h3 { margin:0.4rem 0 0.6rem 0; }
-</style>
-""", unsafe_allow_html=True)
+st.markdown("<h2 style='margin-top:0'>California Air Quality — Scientific Animated Dashboard</h2>", unsafe_allow_html=True)
 
-st.markdown("<h2 style='margin-top:0'>California Air Quality — Scientific Animated Dashboard</h2>",
-            unsafe_allow_html=True)
 
 # Figure heights (tune if needed to fit your screen)
 MAP_H = 420     # animated map
