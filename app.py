@@ -21,7 +21,8 @@ st.markdown("<h1>California Air Quality — Scientific Animated Dashboard</h1><h
 # ---------- Data ----------
 def find_csv():
     p = Path("California_NO2_CO_Combined.csv")
-    if p.exists(): return str(p)
+    if p.exists(): 
+        return str(p)
     for q in list(Path(".").glob("*.csv")) + list(Path("data").glob("*.csv")):
         return str(q)
     return None
@@ -30,12 +31,13 @@ src = st.sidebar.selectbox("Data source", ["Auto-detect CSV","Upload a CSV"])
 if src == "Auto-detect CSV":
     path = find_csv()
     if not path:
-        st.sidebar.warning("No CSV found. Please upload instead.")
+        st.sidebar.warning("No CSV found in repo. Please upload instead.")
         src = "Upload a CSV"
 
 if src == "Upload a CSV":
     up = st.sidebar.file_uploader("Upload CSV", type=["csv"])
-    if up is None: st.stop()
+    if up is None: 
+        st.stop()
     df = pd.read_csv(up)
 else:
     df = pd.read_csv(path)
@@ -86,13 +88,14 @@ reg_series = (wide.merge(county_lat[["County","Region"]], on="County", how="left
 regions = ["North","Central","South"]
 corr_vars = ["NO2","CO","Site Latitude","Site Longitude"]
 
-# pick the more dynamic pollutant and smooth with SMA3
+# choose more-variable pollutant for regional trend; smooth with SMA3
 no2_var = reg_series.groupby("MonthLabel")["NO2"].mean().var()
 co_var  = reg_series.groupby("MonthLabel")["CO"].mean().var()
 trend_pol = "CO" if (co_var > no2_var) else "NO2"
 trend_title = f"Regional Trends ({'CO' if trend_pol=='CO' else 'NO₂'})"
 
 def per_month(m):
+    # map composites
     cm = county_month[county_month["MonthLabel"]==m].copy()
     if len(cm):
         cm["rNO2"] = cm["NO2"].rank(pct=True)
@@ -101,9 +104,11 @@ def per_month(m):
         cm["VarMag"] = np.sqrt(cm["NO2_sd"].fillna(0)**2 + cm["CO_sd"].fillna(0)**2)
         cm["size"] = 8 + 20*(cm["VarMag"]/cm["VarMag"].max()) if cm["VarMag"].max()>0 else 10.0
 
+    # correlation matrix
     sub = wide[wide["MonthLabel"]==m][corr_vars].dropna()
     C = sub.corr().values if len(sub)>=3 else np.zeros((4,4))
 
+    # regional lines cumulative to month m + SMA3
     ms = [x for x in months if x <= m]
     rs = reg_series[reg_series["MonthLabel"].isin(ms)].copy()
     rs["_date"] = pd.to_datetime(rs["MonthLabel"]+"-01")
@@ -112,6 +117,7 @@ def per_month(m):
         mask = rs["Region"]==reg
         rs.loc[mask, trend_pol+"_SMA3"] = rs.loc[mask, trend_pol].rolling(3, min_periods=1).mean()
 
+    # 3D density surface
     S = wide[wide["MonthLabel"]==m][["NO2","CO"]].dropna()
     bins = 35
     if len(S) < 50:
@@ -124,7 +130,7 @@ def per_month(m):
     xmid = 0.5*(xe[:-1] + xe[1:]); ymid = 0.5*(ye[:-1] + ye[1:])
     return cm, C, rs, xmid, ymid, H.T
 
-# ---------- Figure (note: heatmap pane is 'xy', not 'heatmapgl') ----------
+# ---------- Figure (2x2) ----------
 fig = make_subplots(
     rows=2, cols=2,
     specs=[[{"type":"mapbox"}, {"type":"xy"}],
@@ -151,15 +157,18 @@ if len(cm0):
 fig.update_mapboxes(row=1, col=1, style="open-street-map",
                     center=dict(lat=36.5, lon=-119.5), zoom=4.5)
 
-# Heatmap (WebGL) placed in the xy subplot — axes and colors fixed
-heat0 = go.Heatmapgl(z=C0, x=corr_vars, y=corr_vars,
-                     zmin=-1, zmax=1, colorscale="Blues",
-                     showscale=True, hoverongaps=False)
+# Heatmap (standard; axes fixed; constant zmin/zmax/colorscale)
+heat0 = go.Heatmap(
+    z=C0, x=corr_vars, y=corr_vars,
+    zmin=-1, zmax=1, colorscale="Blues",
+    showscale=True, hoverongaps=False,
+    colorbar=dict(title="r", x=1.05, y=0.88)  # move bar slightly right
+)
 fig.add_trace(heat0, row=1, col=2)
-fig.update_xaxes(type="category", row=1, col=2)
-fig.update_yaxes(type="category", row=1, col=2)
+fig.update_xaxes(type="category", fixedrange=True, row=1, col=2)
+fig.update_yaxes(type="category", fixedrange=True, row=1, col=2)
 
-# Regional trend lines
+# Regional trend lines (SMA3)
 for reg in regions:
     sub = rs0[rs0["Region"]==reg].sort_values("_date")
     fig.add_trace(go.Scatter(x=sub["_date"], y=sub[f"{trend_pol}_SMA3"],
@@ -176,12 +185,13 @@ fig.update_layout(
     uirevision="keep"
 )
 
-# ---------- Frames (full traces; Heatmapgl each frame) ----------
+# ---------- Frames (full traces; heatmap stable) ----------
 frames = []
 for m in months:
     cm, C, rs, xmid, ymid, Z = per_month(m)
 
     traces = []
+
     # map
     if len(cm):
         traces.append(go.Scattermapbox(
@@ -192,10 +202,13 @@ for m in months:
     else:
         traces.append(go.Scattermapbox(lat=[], lon=[], showlegend=False))
 
-    # heatmapgl — smooth GPU update; axes/colors stay constant
-    traces.append(go.Heatmapgl(z=C, x=corr_vars, y=corr_vars,
-                               zmin=-1, zmax=1, colorscale="Blues",
-                               showscale=True, hoverongaps=False))
+    # heatmap — full trace but with fixed axes/scale (no relayout blink)
+    traces.append(go.Heatmap(
+        z=C, x=corr_vars, y=corr_vars,
+        zmin=-1, zmax=1, colorscale="Blues",
+        showscale=True, hoverongaps=False,
+        colorbar=dict(title="r", x=1.05, y=0.88)
+    ))
 
     # lines
     for reg in regions:
@@ -210,15 +223,15 @@ for m in months:
 
 fig.frames = frames
 
-# Controls
+# ---------- Controls ----------
 fig.update_layout(
     updatemenus=[{
         "type":"buttons",
         "buttons":[
             {"label":"Play","method":"animate",
              "args":[None, {"fromcurrent":True,
-                            "frame":{"duration":600, "redraw": False},
-                            "transition":{"duration":200}}]},
+                            "frame":{"duration":500, "redraw": False},
+                            "transition":{"duration":180}}]},
             {"label":"Pause","method":"animate",
              "args":[[None], {"mode":"immediate",
                               "frame":{"duration":0, "redraw": False},
@@ -232,7 +245,7 @@ fig.update_layout(
         "currentvalue":{"prefix":"Month: "},
         "pad":{"t":40, "b":0},
         "steps":[{"args":[[m], {"frame":{"duration":0, "redraw": False},
-                                 "transition":{"duration":0}}],
+                                 "transition":{"duration":120}}],
                   "label":m, "method":"animate"} for m in months]
     }]
 )
