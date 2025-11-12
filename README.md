@@ -1,7 +1,8 @@
 # 🌤️ California Air Quality — Animated Dashboard
+## 🌎 Live Links
 
-[![Streamlit](https://img.shields.io/badge/Streamlit-Live%20App-red?logo=streamlit)](https://california-air-dashboard-7rruzuvgrr3bwxqxjio7p6.streamlit.app/)
-[![GitHub Pages](https://simasadi.github.io/california-air-dashboard/California_Air_Dashboard_Scientific.html)
+[![Streamlit](https://img.shields.io/badge/Streamlit-Live%20App-FF4B4B.svg)](https://california-air-dashboard-7rruzuvgrr3bwxqxjio7p6.streamlit.app/)
+[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-HTML%20Dashboard-2ea44f.svg)](https://simasaadi.github.io/california-air-dashboard/California_Air_Dashboard_Scientific.html)
 
 Interactive and animated data visualizations from **California NO₂ & CO air quality monitoring data**, created using **Streamlit + Plotly**.
 
