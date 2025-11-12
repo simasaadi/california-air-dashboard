@@ -18,11 +18,12 @@ hr{margin:0.2rem 0 1.0rem 0; border:1px solid #999;}
 st.markdown("<h1>California Air Quality — Scientific Animated Dashboard</h1><hr/>",
             unsafe_allow_html=True)
 
-# -------- Data --------
+# -------- Data helpers --------
 def find_csv():
     p = Path("California_NO2_CO_Combined.csv")
     if p.exists(): return str(p)
-    for q in list(Path(".").glob("*.csv")) + list(Path("data").glob("*.csv")): return str(q)
+    for q in list(Path(".").glob("*.csv")) + list(Path("data").glob("*.csv")):
+        return str(q)
     return None
 
 src = st.sidebar.selectbox("Data source", ["Auto-detect CSV","Upload a CSV"])
@@ -85,7 +86,7 @@ reg_series = (wide.merge(county_lat[["County","Region"]], on="County", how="left
 regions = ["North","Central","South"]
 corr_vars = ["NO2","CO","Site Latitude","Site Longitude"]
 
-# Pick trend pollutant with more variance + SMA3
+# Choose more variable pollutant for the trend panel + SMA3
 no2_var = reg_series.groupby("MonthLabel")["NO2"].mean().var()
 co_var  = reg_series.groupby("MonthLabel")["CO"].mean().var()
 trend_pol = "CO" if (co_var > no2_var) else "NO2"
@@ -123,10 +124,10 @@ def per_month(m):
     xmid = 0.5*(xe[:-1] + xe[1:]); ymid = 0.5*(ye[:-1] + ye[1:])
     return cm, C, rs, xmid, ymid, H.T
 
-# -------- Figure --------
+# -------- Figure (2x2) --------
 fig = make_subplots(
     rows=2, cols=2,
-    specs=[[{"type":"mapbox"}, {"type":"heatmap"}],
+    specs=[[{"type":"mapbox"}, {"type":"heatmapgl"}],
            [{"type":"xy"},      {"type":"surface"}]],
     column_widths=[0.5, 0.5], row_heights=[0.5, 0.5],
     horizontal_spacing=0.08, vertical_spacing=0.12,
@@ -137,7 +138,7 @@ fig = make_subplots(
 m0 = months[0]
 cm0, C0, rs0, x0, y0, Z0 = per_month(m0)
 
-# Map (trace index 0)
+# Map
 if len(cm0):
     fig.add_trace(
         go.Scattermapbox(
@@ -150,23 +151,23 @@ if len(cm0):
 fig.update_mapboxes(row=1, col=1, style="open-street-map",
                     center=dict(lat=36.5, lon=-119.5), zoom=4.5)
 
-# Heatmap (trace index 1)
-fig.add_trace(
-    go.Heatmap(z=C0, x=corr_vars, y=corr_vars,
-               zmin=-1, zmax=1, coloraxis="coloraxis",
-               hoverongaps=False, showscale=True),
-    row=1, col=2
-)
-fig.update_layout(coloraxis=dict(colorscale="Blues",
-                                 colorbar=dict(title="r", y=0.88)))
+# HEATMAP: use WebGL (smooth) + fixed axes & colorscale
+heat = go.Heatmapgl(
+    z=C0, x=corr_vars, y=corr_vars, zmin=-1, zmax=1,
+    colorscale="Blues", showscale=True, hoverongaps=False)
+fig.add_trace(heat, row=1, col=2)
 
-# Regional lines (trace indices 2–4)
+# anchor the heatmap subplot so it doesn't relayout (category axes)
+fig.update_xaxes(matches=None, row=1, col=2, type="category")
+fig.update_yaxes(matches=None, row=1, col=2, type="category")
+
+# Regional lines
 for reg in regions:
     sub = rs0[rs0["Region"]==reg].sort_values("_date")
     fig.add_trace(go.Scatter(x=sub["_date"], y=sub[f"{trend_pol}_SMA3"],
                              mode="lines", name=reg), row=2, col=1)
 
-# Surface (trace index 5)
+# Surface
 fig.add_trace(go.Surface(z=Z0, x=x0, y=y0, showscale=False), row=2, col=2)
 
 fig.update_layout(
@@ -174,51 +175,41 @@ fig.update_layout(
     scene=dict(xaxis_title="NO₂", yaxis_title="CO", zaxis_title="Density"),
     legend=dict(orientation="h", yanchor="bottom", y=0.08, xanchor="left", x=0.05),
     title=dict(text=f"Month: {m0}", x=0.5, y=0.985),
-    uirevision="keep"  # keep view stable
+    uirevision="keep"
 )
 
-# --- Trace indices (robust, in case code reorders later) ---
-types = [t.type for t in fig.data]
-map_idx  = next(i for i,t in enumerate(types) if t=="scattermapbox")
-heat_idx = next(i for i,t in enumerate(types) if t=="heatmap")
-line_idx = [i for i,t in enumerate(types) if t=="scatter" ]
-surf_idx = next(i for i,t in enumerate(types) if t=="surface")
-
-# -------- Frames (targeted restyle of heatmap z, no redraw) --------
+# -------- Frames (full traces per frame; Heatmapgl for smooth updates) --------
 frames = []
 for m in months:
     cm, C, rs, xmid, ymid, Z = per_month(m)
 
-    data = []
+    traces = []
 
-    # map (full)
+    # map
     if len(cm):
-        data.append(go.Scattermapbox(
+        traces.append(go.Scattermapbox(
             lat=cm["lat"], lon=cm["lon"], mode="markers", showlegend=False,
             marker=dict(size=cm["size"], color=cm["Composite"], colorscale="Blues", showscale=False),
             text=cm["County"], customdata=np.c_[cm["NO2"], cm["CO"]],
         ))
     else:
-        data.append(go.Scattermapbox(lat=[], lon=[], showlegend=False))
+        traces.append(go.Scattermapbox(lat=[], lon=[], showlegend=False))
 
-    # heatmap — only z (IMPORTANT: position 2nd in 'data' and mapped to heat_idx)
-    data.append({"z": C})
+    # heatmapgl (full but extremely lightweight on GPU; keeps axes constant)
+    traces.append(go.Heatmapgl(z=C, x=corr_vars, y=corr_vars,
+                               zmin=-1, zmax=1, colorscale="Blues",
+                               showscale=True, hoverongaps=False))
 
-    # lines (full)
+    # regional lines
     for reg in regions:
         sub = rs[rs["Region"]==reg].sort_values("_date")
-        data.append(go.Scatter(x=sub["_date"], y=sub[f"{trend_pol}_SMA3"], mode="lines"))
+        traces.append(go.Scatter(x=sub["_date"], y=sub[f"{trend_pol}_SMA3"], mode="lines"))
 
-    # surface (full)
-    data.append(go.Surface(z=Z, x=xmid, y=ymid, showscale=False))
+    # surface
+    traces.append(go.Surface(z=Z, x=xmid, y=ymid, showscale=False))
 
-    # map to exact trace ids (order: map, heat, three lines, surface)
-    frames.append(go.Frame(
-        name=m,
-        data=data,
-        traces=[map_idx, heat_idx] + line_idx + [surf_idx],
-        layout=go.Layout(title=dict(text=f"Month: {m}", x=0.5, y=0.985))
-    ))
+    frames.append(go.Frame(name=m, data=traces,
+                           layout=go.Layout(title=dict(text=f"Month: {m}", x=0.5, y=0.985))))
 
 fig.frames = frames
 
@@ -229,8 +220,8 @@ fig.update_layout(
         "buttons":[
             {"label":"Play","method":"animate",
              "args":[None, {"fromcurrent":True,
-                            "frame":{"duration":600, "redraw": False},  # <-- no redraw
-                            "transition":{"duration":250}}]},
+                            "frame":{"duration":600, "redraw": False},
+                            "transition":{"duration":200}}]},
             {"label":"Pause","method":"animate",
              "args":[[None], {"mode":"immediate",
                               "frame":{"duration":0, "redraw": False},
