@@ -123,21 +123,45 @@ for m in months_sorted:
     frames_corr.append(go.Frame(name=m, data=[go.Heatmap(z=C, x=corr_vars, y=corr_vars, zmin=-1, zmax=1)]))
 fig_corr.frames = frames_corr
 fig_corr.update_layout(
-    height=FIG_H, margin=dict(l=5,r=5,t=30,b=0),
+    height=FIG_H,
+    margin=dict(l=60, r=60, t=30, b=120),   # more bottom margin
+
     updatemenus=[{
-        "type":"buttons",
-        "buttons":[
-            {"label":"Play","method":"animate","args":[None, {"fromcurrent":True,"frame":{"duration":900,"redraw":True},"transition":{"duration":300}}]},
-            {"label":"Pause","method":"animate","args":[[None], {"mode":"immediate","frame":{"duration":0,"redraw":False},"transition":{"duration":0}}]}
+        "type": "buttons",
+        "buttons": [
+            {"label": "Play",  "method": "animate",
+             "args": [None, {"fromcurrent": True,
+                             "frame": {"duration": 900, "redraw": True},
+                             "transition": {"duration": 300}}]},
+            {"label": "Pause", "method": "animate",
+             "args": [[None], {"mode": "immediate",
+                               "frame": {"duration": 0, "redraw": False},
+                               "transition": {"duration": 0}}]}
         ],
-        "x":0.0,"y":1.1,"xanchor":"left","yanchor":"top"
+        "x": 0.0, "y": 1.18, "xanchor": "left", "yanchor": "top"
     }],
+
     sliders=[{
-        "active": 0, "pad":{"t":8}, "x":0.1, "len":0.8,
-        "currentvalue":{"prefix":"Month: "},
-        "steps":[{"args":[[fr.name], {"frame":{"duration":0,"redraw":True},"transition":{"duration":0}}], "label":fr.name, "method":"animate"} for fr in frames_corr]
-    }]
+        "active": 0,
+        "x": 0.08, "len": 0.84,
+        "y": -0.22,                       # below the axes
+        "pad": {"t": 10, "b": 0},
+        "currentvalue": {"prefix": "Month: "},
+        "steps": [
+            {"args": [[fr.name],
+                      {"frame": {"duration": 0, "redraw": True},
+                       "transition": {"duration": 0}}],
+             "label": fr.name, "method": "animate"}
+            for fr in frames_corr
+        ]
+    }],
+
+    coloraxis_colorbar=dict(title="r", thickness=12, y=0.5)
 )
+
+fig_corr.update_xaxes(tickfont=dict(size=11))
+fig_corr.update_yaxes(tickfont=dict(size=11))
+
 
 # =====================================================
 # Chart 3) Regional Trends (North/Central/South) — Anim
