@@ -254,4 +254,13 @@ with col4:
     st.plotly_chart(fig_surface, use_container_width=True)
 
 st.caption("Tip: Use the sliders or Play buttons on each chart to animate through months.")
-st.caption("Developed by Sima Saadi | 2025 | simasaadi.github.io")
+st.markdown(
+    """
+    <div style='text-align:right; font-size:15px; color:#444;'>
+        <b>Developed by <span style="color:#2E86C1;">Sima Saadi</span></b> | 2025 |
+        <a href='https://simasaadi.github.io' target='_blank' style='color:#2E86C1; text-decoration:none;'>simasaadi.github.io</a>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
