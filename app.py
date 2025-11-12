@@ -254,3 +254,4 @@ with col4:
     st.plotly_chart(fig_surface, use_container_width=True)
 
 st.caption("Tip: Use the sliders or Play buttons on each chart to animate through months.")
+st.caption("Developed by Sima Saadi | 2025 | simasaadi.github.io")
