@@ -15,23 +15,23 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Clean centered title + divider
+# Clean centered title + divider (no overlap)
 st.markdown("""
-    <h1 style='text-align:center; margin-bottom:0.3rem;'>
+    <h1 style='text-align:center; margin:0.4rem 0 0.2rem 0;'>
         California Air Quality — Scientific Animated Dashboard
     </h1>
-    <hr style='margin-top:0.2rem; margin-bottom:0.6rem; border:1px solid #999;'/>
+    <hr style='margin:0.2rem 0 0.8rem 0; border:1px solid #999;'/>
 """, unsafe_allow_html=True)
 
-# Tighten padding
+# Tighten padding for a one-screen view
 st.markdown("""
 <style>
-.block-container {padding-top:0.4rem; padding-bottom:0.6rem; max-width:1400px;}
+.block-container {padding-top:0.2rem; padding-bottom:0.6rem; max-width:1400px;}
 h1, h2, h3 { margin:0.4rem 0 0.6rem 0; }
 </style>
 """, unsafe_allow_html=True)
 
-# Figure heights (tune for your screen)
+# Figure heights (tune for your screen if needed)
 MAP_H = 420
 FIG_H = 340
 
@@ -54,11 +54,9 @@ def load_data(file_like):
 # Find a CSV automatically (or fall back to uploader)
 # =======================
 def find_csv():
-    # 1) Prefer the canonical file name
     cand = Path("California_NO2_CO_Combined.csv")
     if cand.exists():
         return cand
-    # 2) otherwise: first CSV in repo root or in ./data
     for p in list(Path(".").glob("*.csv")) + list(Path("data").glob("*.csv")):
         return p
     return None
@@ -138,14 +136,16 @@ with c3:
                              label_visibility="collapsed")
     st.session_state.speed_ms = speed
 with c4:
-    st.markdown(f"<div style='text-align:right;padding-top:8px'><b>{months_sorted[st.session_state.month_idx]}</b></div>",
-                unsafe_allow_html=True)
+    st.markdown(
+        f"<div style='text-align:right;padding-top:8px'><b>{months_sorted[st.session_state.month_idx]}</b></div>",
+        unsafe_allow_html=True
+    )
 
-# Auto-advance when playing
+# Auto-advance when playing  (use st.rerun — not experimental)
 if st.session_state.play:
     time.sleep(st.session_state.speed_ms / 1000.0)
     next_frame()
-    st.experimental_rerun()
+    st.rerun()
 
 # Current month label
 M = months_sorted[st.session_state.month_idx]
