@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from pathlib import Path
 
-# -------- Page --------
+# ---------- Page ----------
 st.set_page_config(page_title="California Air Quality — Scientific Animated",
                    layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
@@ -18,7 +18,7 @@ hr{margin:0.2rem 0 1.0rem 0; border:1px solid #999;}
 st.markdown("<h1>California Air Quality — Scientific Animated Dashboard</h1><hr/>",
             unsafe_allow_html=True)
 
-# -------- Data helpers --------
+# ---------- Data ----------
 def find_csv():
     p = Path("California_NO2_CO_Combined.csv")
     if p.exists(): return str(p)
@@ -86,7 +86,7 @@ reg_series = (wide.merge(county_lat[["County","Region"]], on="County", how="left
 regions = ["North","Central","South"]
 corr_vars = ["NO2","CO","Site Latitude","Site Longitude"]
 
-# Choose more variable pollutant for the trend panel + SMA3
+# pick the more dynamic pollutant and smooth with SMA3
 no2_var = reg_series.groupby("MonthLabel")["NO2"].mean().var()
 co_var  = reg_series.groupby("MonthLabel")["CO"].mean().var()
 trend_pol = "CO" if (co_var > no2_var) else "NO2"
@@ -124,10 +124,10 @@ def per_month(m):
     xmid = 0.5*(xe[:-1] + xe[1:]); ymid = 0.5*(ye[:-1] + ye[1:])
     return cm, C, rs, xmid, ymid, H.T
 
-# -------- Figure (2x2) --------
+# ---------- Figure (note: heatmap pane is 'xy', not 'heatmapgl') ----------
 fig = make_subplots(
     rows=2, cols=2,
-    specs=[[{"type":"mapbox"}, {"type":"heatmapgl"}],
+    specs=[[{"type":"mapbox"}, {"type":"xy"}],
            [{"type":"xy"},      {"type":"surface"}]],
     column_widths=[0.5, 0.5], row_heights=[0.5, 0.5],
     horizontal_spacing=0.08, vertical_spacing=0.12,
@@ -151,17 +151,15 @@ if len(cm0):
 fig.update_mapboxes(row=1, col=1, style="open-street-map",
                     center=dict(lat=36.5, lon=-119.5), zoom=4.5)
 
-# HEATMAP: use WebGL (smooth) + fixed axes & colorscale
-heat = go.Heatmapgl(
-    z=C0, x=corr_vars, y=corr_vars, zmin=-1, zmax=1,
-    colorscale="Blues", showscale=True, hoverongaps=False)
-fig.add_trace(heat, row=1, col=2)
+# Heatmap (WebGL) placed in the xy subplot — axes and colors fixed
+heat0 = go.Heatmapgl(z=C0, x=corr_vars, y=corr_vars,
+                     zmin=-1, zmax=1, colorscale="Blues",
+                     showscale=True, hoverongaps=False)
+fig.add_trace(heat0, row=1, col=2)
+fig.update_xaxes(type="category", row=1, col=2)
+fig.update_yaxes(type="category", row=1, col=2)
 
-# anchor the heatmap subplot so it doesn't relayout (category axes)
-fig.update_xaxes(matches=None, row=1, col=2, type="category")
-fig.update_yaxes(matches=None, row=1, col=2, type="category")
-
-# Regional lines
+# Regional trend lines
 for reg in regions:
     sub = rs0[rs0["Region"]==reg].sort_values("_date")
     fig.add_trace(go.Scatter(x=sub["_date"], y=sub[f"{trend_pol}_SMA3"],
@@ -178,13 +176,12 @@ fig.update_layout(
     uirevision="keep"
 )
 
-# -------- Frames (full traces per frame; Heatmapgl for smooth updates) --------
+# ---------- Frames (full traces; Heatmapgl each frame) ----------
 frames = []
 for m in months:
     cm, C, rs, xmid, ymid, Z = per_month(m)
 
     traces = []
-
     # map
     if len(cm):
         traces.append(go.Scattermapbox(
@@ -195,12 +192,12 @@ for m in months:
     else:
         traces.append(go.Scattermapbox(lat=[], lon=[], showlegend=False))
 
-    # heatmapgl (full but extremely lightweight on GPU; keeps axes constant)
+    # heatmapgl — smooth GPU update; axes/colors stay constant
     traces.append(go.Heatmapgl(z=C, x=corr_vars, y=corr_vars,
                                zmin=-1, zmax=1, colorscale="Blues",
                                showscale=True, hoverongaps=False))
 
-    # regional lines
+    # lines
     for reg in regions:
         sub = rs[rs["Region"]==reg].sort_values("_date")
         traces.append(go.Scatter(x=sub["_date"], y=sub[f"{trend_pol}_SMA3"], mode="lines"))
