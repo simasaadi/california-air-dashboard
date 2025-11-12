@@ -1,298 +1,233 @@
-import time
-from pathlib import Path
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import plotly.express as px
+from pathlib import Path
 
-# ===============================
-# Page setup (single-screen layout)
-# ===============================
-st.set_page_config(
-    page_title="California Air Quality — Scientific Animated",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
-# Clean centered title + divider (no overlap)
-st.markdown("""
-    <h1 style='text-align:center; margin:0.4rem 0 0.2rem 0;'>
-        California Air Quality — Scientific Animated Dashboard
-    </h1>
-    <hr style='margin:0.2rem 0 0.8rem 0; border:1px solid #999;'/>
-""", unsafe_allow_html=True)
-
-# Tighten padding for a one-screen view
+# ---------------- Page setup (no overlap) ----------------
+st.set_page_config(page_title="California Air Quality — Scientific Animated", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
 <style>
-.block-container {padding-top:0.2rem; padding-bottom:0.6rem; max-width:1400px;}
-h1, h2, h3 { margin:0.4rem 0 0.6rem 0; }
+.block-container{padding-top:0.6rem; padding-bottom:0.6rem; max-width:1400px;}
+h1{margin:0.2rem 0 0.6rem 0; text-align:center;}
+hr{margin:0.2rem 0 0.8rem 0; border:1px solid #999;}
 </style>
 """, unsafe_allow_html=True)
+st.markdown("<h1>California Air Quality — Scientific Animated Dashboard</h1><hr/>", unsafe_allow_html=True)
 
-# Figure heights (tune for your screen)
-MAP_H = 420
-FIG_H = 340
-
-# =======================
-# Data loading & caching
-# =======================
-@st.cache_data(show_spinner=False)
-def read_csv_cached(file_like_or_path):
-    df = pd.read_csv(file_like_or_path)
-    required = ["Date","Pollutant","Concentration","County","Site Latitude","Site Longitude","Site ID"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError(f"CSV missing required columns: {missing}")
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df = df.dropna(subset=["Date","Concentration","Site Latitude","Site Longitude","Pollutant","County"])
-    df["MonthLabel"] = df["Date"].dt.to_period("M").astype(str)
-    return df
-
+# ---------------- Data loading ----------------
 def find_csv():
-    cand = Path("California_NO2_CO_Combined.csv")
-    if cand.exists():
-        return cand
-    for p in list(Path(".").glob("*.csv")) + list(Path("data").glob("*.csv")):
-        return p
+    p = Path("California_NO2_CO_Combined.csv")
+    if p.exists(): return str(p)
+    for q in list(Path(".").glob("*.csv")) + list(Path("data").glob("*.csv")):
+        return str(q)
     return None
 
-# --- Sidebar source selection
-st.sidebar.header("Data")
-auto_csv = find_csv()
-mode = st.sidebar.selectbox(
-    "Choose data source",
-    ["Auto-detect CSV" + (f" ({auto_csv.name})" if auto_csv else " (not found)"),
-     "Upload a CSV"],
-    index=0 if auto_csv else 1
-)
+src = st.sidebar.selectbox("Data source", ["Auto-detect CSV","Upload a CSV"])
+if src == "Auto-detect CSV":
+    path = find_csv()
+    if not path:
+        st.sidebar.warning("No CSV found. Please upload instead.")
+        src = "Upload a CSV"
 
-if "df_key" not in st.session_state:
-    st.session_state.df_key = None
-if "df" not in st.session_state:
-    st.session_state.df = None
-
-if mode.startswith("Auto-detect") and auto_csv:
-    df = read_csv_cached(str(auto_csv))
-    key = f"auto::{auto_csv.name}:{auto_csv.stat().st_size}"
+if src == "Upload a CSV":
+    up = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+    if up is None: st.stop()
+    df = pd.read_csv(up)
 else:
-    up = st.sidebar.file_uploader("Upload a CSV", type=["csv"], key="uploader")
-    if up is None:
-        st.warning("No CSV found. Please upload a CSV to continue.")
-        st.stop()
-    df = read_csv_cached(up)          # cached by file content
-    key = f"upload::{up.name}:{up.size}"
+    df = pd.read_csv(path)
 
-# Keep df stable across reruns while animating
-if st.session_state.df_key != key:
-    st.session_state.df_key = key
-    st.session_state.df = df.copy()
-df = st.session_state.df
+# Validate + prepare
+req = ["Date","Pollutant","Concentration","County","Site Latitude","Site Longitude","Site ID"]
+missing = [c for c in req if c not in df.columns]
+if missing:
+    st.error(f"CSV missing required columns: {missing}")
+    st.stop()
 
-# Filter months with enough data
-st.sidebar.header("Animation/Data Filters")
+df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+df = df.dropna(subset=["Date","Pollutant","Concentration","County","Site Latitude","Site Longitude"])
+df["MonthLabel"] = df["Date"].dt.to_period("M").astype(str)
+
 min_obs = st.sidebar.slider("Min observations per month (for animations)", 200, 2000, 800, 50)
-months_counts = df["MonthLabel"].value_counts()
-rich_months = sorted(months_counts[months_counts >= min_obs].index.tolist())
+rich = df["MonthLabel"].value_counts()
+rich_months = sorted(rich[rich >= min_obs].index.tolist())
 df = df[df["MonthLabel"].isin(rich_months)].copy()
+if not len(rich_months):
+    st.warning("No month meets the threshold. Lower the slider.")
+    st.stop()
 
-# =======================
-# Precompute once per dataset (heavy work cached)
-# =======================
-@st.cache_data(show_spinner=False)
-def prepare_all(df_in: pd.DataFrame):
-    # wide table
-    wide = (
-        df_in.pivot_table(
+# Wide table
+wide = (df.pivot_table(
             index=["Date","Site ID","Site Latitude","Site Longitude","County"],
             columns="Pollutant",
             values="Concentration",
-            aggfunc="mean"
-        ).reset_index()
-    )
-    wide["MonthLabel"] = wide["Date"].dt.to_period("M").astype(str)
-    months_sorted = sorted(wide["MonthLabel"].unique())
+            aggfunc="mean")
+        .reset_index())
+wide["MonthLabel"] = wide["Date"].dt.to_period("M").astype(str)
+months = sorted(wide["MonthLabel"].unique())
 
-    # county-month aggregates (for map)
-    county_month_all = (
-        wide.groupby(["County","MonthLabel"], as_index=False)
-            .agg(lat=("Site Latitude","mean"),
-                 lon=("Site Longitude","mean"),
-                 NO2=("NO2","mean"),
-                 CO=("CO","mean"),
-                 NO2_sd=("NO2","std"),
-                 CO_sd=("CO","std"),
-                 n=("Site ID","nunique"))
-    )
+# Precompute — county monthly
+county_month = (wide.groupby(["County","MonthLabel"], as_index=False)
+                    .agg(lat=("Site Latitude","mean"),
+                         lon=("Site Longitude","mean"),
+                         NO2=("NO2","mean"),
+                         CO=("CO","mean"),
+                         NO2_sd=("NO2","std"),
+                         CO_sd=("CO","std"),
+                         n=("Site ID","nunique")))
 
-    # correlation matrices per month
-    corr_vars = ["NO2","CO","Site Latitude","Site Longitude"]
-    corr_dict = {}
-    for m in months_sorted:
-        sub = wide[wide["MonthLabel"]==m][corr_vars].dropna()
-        if len(sub) < 3:
-            C = np.zeros((len(corr_vars), len(corr_vars)))
-        else:
-            C = sub.corr().values
-        corr_dict[m] = C
-
-    # regional series per month (use county centroid lat)
-    county_lat = wide.groupby("County", as_index=False)["Site Latitude"].mean().rename(columns={"Site Latitude":"centroid_lat"})
-    q1, q2 = county_lat["centroid_lat"].quantile([0.33, 0.66]).tolist()
-    def region_from_lat(lat):
-        if lat <= q1: return "South"
-        if lat <= q2: return "Central"
-        return "North"
-    county_lat["Region"] = county_lat["centroid_lat"].apply(region_from_lat)
-    cm_region_all = (
-        wide.merge(county_lat[["County","Region"]], on="County", how="left")
-            .groupby(["Region","MonthLabel"], as_index=False)
-            .agg(NO2=("NO2","mean"), CO=("CO","mean"))
-    )
-
-    # 3D surfaces per month (pre-binned)
-    surface_bins = 45
-    surface_dict = {}
-    for m in months_sorted:
-        sub = wide[wide["MonthLabel"]==m][["NO2","CO"]].dropna()
-        if len(sub) < 50:
-            H = np.zeros((surface_bins, surface_bins))
-            xe = np.linspace(0,1,surface_bins+1); ye = np.linspace(0,1,surface_bins+1)
-        else:
-            x = sub["NO2"].values; y = sub["CO"].values
-            xbins = np.linspace(np.nanmin(x), np.nanmax(x), surface_bins+1)
-            ybins = np.linspace(np.nanmin(y), np.nanmax(y), surface_bins+1)
-            H, xe, ye = np.histogram2d(x, y, bins=[xbins, ybins], density=True)
-        xmid = 0.5*(xe[:-1] + xe[1:]); ymid = 0.5*(ye[:-1] + ye[1:])
-        surface_dict[m] = (H.T, xmid, ymid)
-
-    return wide, months_sorted, county_month_all, corr_dict, cm_region_all, surface_dict
-
-wide, months_sorted, county_month_all, corr_dict, cm_region_all, surface_dict = prepare_all(df)
-
-if not months_sorted:
-    st.warning("No months meet the minimum observations threshold. Lower the slider in the sidebar.")
-    st.stop()
-
-# =======================
-# Global synchronized controls
-# =======================
-if "play" not in st.session_state:
-    st.session_state.play = False
-if "month_idx" not in st.session_state:
-    st.session_state.month_idx = 0
-if "speed_ms" not in st.session_state:
-    st.session_state.speed_ms = 900  # ms
-
-def toggle_play():
-    st.session_state.play = not st.session_state.play
-
-def next_frame():
-    st.session_state.month_idx = (st.session_state.month_idx + 1) % len(months_sorted)
-
-# Top control bar
-c1, c2, c3, c4 = st.columns([0.1, 0.7, 0.15, 0.15])
-with c1:
-    st.button("▶️ / ⏸", on_click=toggle_play, help="Play/Pause all charts")
-with c2:
-    st.session_state.month_idx = st.slider(
-        "Month",
-        min_value=0, max_value=len(months_sorted)-1,
-        value=st.session_state.month_idx,
-        format="%d",
-        label_visibility="collapsed",
-    )
-with c3:
-    speed = st.select_slider("Speed", options=[300, 600, 900, 1200, 1500],
-                             value=st.session_state.speed_ms,
-                             format_func=lambda x: f"{int(x/1000)}s",
-                             label_visibility="collapsed")
-    st.session_state.speed_ms = speed
-with c4:
-    st.markdown(
-        f"<div style='text-align:right;padding-top:8px'><b>{months_sorted[st.session_state.month_idx]}</b></div>",
-        unsafe_allow_html=True
-    )
-
-# Auto-advance when playing (lightweight now)
-if st.session_state.play:
-    time.sleep(st.session_state.speed_ms / 1000.0)
-    next_frame()
-    st.rerun()
-
-# Current month label
-M = months_sorted[st.session_state.month_idx]
-
-# ===============================
-# Build figures for month M (fast)
-# ===============================
-
-# Map table for month M
-cm = county_month_all[county_month_all["MonthLabel"]==M].copy()
-if not cm.empty:
-    cm["rNO2"] = cm["NO2"].rank(pct=True)
-    cm["rCO"]  = cm["CO"].rank(pct=True)
-    cm["Composite"] = 100.0*(0.5*cm["rNO2"] + 0.5*cm["rCO"])
-    cm["VarMag"] = np.sqrt(cm["NO2_sd"].fillna(0)**2 + cm["CO_sd"].fillna(0)**2)
-    cm["size"] = 8 + 20*(cm["VarMag"]/cm["VarMag"].max()) if cm["VarMag"].max() > 0 else 10.0
-
-# 1) Map
-if cm.empty:
-    fig_map = go.Figure()
-    fig_map.update_layout(height=MAP_H, margin=dict(l=5,r=5,t=30,b=0))
-else:
-    fig_map = px.scatter_mapbox(
-        cm, lat="lat", lon="lon",
-        color="Composite", size="size",
-        hover_name="County",
-        hover_data={"lat":":.3f","lon":":.3f","NO2":":.2f","CO":":.2f","Composite":":.1f","n":True,"size":False},
-        zoom=4.5
-    )
-    fig_map.update_layout(mapbox_style="open-street-map",
-                          height=MAP_H, margin=dict(l=5,r=5,t=30,b=0))
-
-# 2) Correlation
-corr_vars = ["NO2","CO","Site Latitude","Site Longitude"]
-C_M = corr_dict.get(M, np.zeros((4,4)))
-fig_corr = go.Figure(data=[go.Heatmap(z=C_M, x=corr_vars, y=corr_vars, zmin=-1, zmax=1, colorbar=dict(title="r"))])
-fig_corr.update_layout(height=FIG_H, margin=dict(l=5,r=5,t=30,b=0))
-
-# 3) Regional lines (cumulative to M)
-months_to_plot = [m for m in months_sorted if m <= M]
-cm_region = cm_region_all[cm_region_all["MonthLabel"].isin(months_to_plot)].copy()
-cm_region["_date"] = pd.to_datetime(cm_region["MonthLabel"]+"-01")
+# Regional buckets
+county_lat = wide.groupby("County", as_index=False)["Site Latitude"].mean().rename(columns={"Site Latitude":"centroid_lat"})
+q1, q2 = county_lat["centroid_lat"].quantile([0.33, 0.66]).tolist()
+def region_from_lat(v):
+    if v <= q1: return "South"
+    if v <= q2: return "Central"
+    return "North"
+county_lat["Region"] = county_lat["centroid_lat"].apply(region_from_lat)
+reg_series = (wide.merge(county_lat[["County","Region"]], on="County", how="left")
+                 .groupby(["Region","MonthLabel"], as_index=False)
+                 .agg(NO2=("NO2","mean"), CO=("CO","mean")))
 regions = ["North","Central","South"]
-fig_regions = go.Figure()
+corr_vars = ["NO2","CO","Site Latitude","Site Longitude"]
+
+# Helper: per-month derived tables
+def per_month_tables(m):
+    # map table
+    cm = county_month[county_month["MonthLabel"]==m].copy()
+    if len(cm):
+        cm["rNO2"] = cm["NO2"].rank(pct=True)
+        cm["rCO"]  = cm["CO"].rank(pct=True)
+        cm["Composite"] = 100.0*(0.5*cm["rNO2"] + 0.5*cm["rCO"])
+        cm["VarMag"] = np.sqrt(cm["NO2_sd"].fillna(0)**2 + cm["CO_sd"].fillna(0)**2)
+        cm["size"] = 8 + 20*(cm["VarMag"]/cm["VarMag"].max()) if cm["VarMag"].max()>0 else 10.0
+
+    # correlation
+    sub = wide[wide["MonthLabel"]==m][corr_vars].dropna()
+    C = sub.corr().values if len(sub)>=3 else np.zeros((4,4))
+
+    # regional (up to month m)
+    months_to_plot = [x for x in months if x <= m]
+    rs = reg_series[reg_series["MonthLabel"].isin(months_to_plot)].copy()
+    rs["_date"] = pd.to_datetime(rs["MonthLabel"]+"-01")
+
+    # 3D surface bins
+    S = wide[wide["MonthLabel"]==m][["NO2","CO"]].dropna()
+    bins = 45
+    if len(S) < 50:
+        H = np.zeros((bins, bins))
+        xe = np.linspace(0,1,bins+1); ye = np.linspace(0,1,bins+1)
+    else:
+        x = S["NO2"].values; y = S["CO"].values
+        xbins = np.linspace(np.nanmin(x), np.nanmax(x), bins+1)
+        ybins = np.linspace(np.nanmin(y), np.nanmax(y), bins+1)
+        H, xe, ye = np.histogram2d(x, y, bins=[xbins, ybins], density=True)
+    xmid = 0.5*(xe[:-1] + xe[1:]); ymid = 0.5*(ye[:-1] + ye[1:])
+    return cm, C, rs, xmid, ymid, H.T
+
+# ---------------- One Plotly figure with subplots & frames ----------------
+fig = make_subplots(
+    rows=2, cols=2,
+    specs=[[{"type":"mapbox"}, {"type":"heatmap"}],
+           [{"type":"xy"},      {"type":"surface"}]],
+    column_widths=[0.5, 0.5], row_heights=[0.5, 0.5],
+    horizontal_spacing=0.08, vertical_spacing=0.1,
+    subplot_titles=("Composite Index — Map", "Correlation Heatmap",
+                    "Regional Trends (NO₂)", "3D Exposure Surface")
+)
+
+# Initial month
+m0 = months[0]
+cm0, C0, rs0, x0, y0, Z0 = per_month_tables(m0)
+
+# --- Map (r1c1)
+if len(cm0):
+    fig.add_scattermapbox(
+        lat=cm0["lat"], lon=cm0["lon"],
+        mode="markers",
+        marker=dict(size=cm0["size"], color=cm0["Composite"], colorscale="Blues", showscale=True, colorbar=dict(title="Composite")),
+        text=cm0["County"],
+        hovertemplate="County=%{text}<br>NO₂=%{customdata[0]:.2f}<br>CO=%{customdata[1]:.2f}<extra></extra>",
+        customdata=np.c_[cm0["NO2"], cm0["CO"]],
+        row=1, col=1
+    )
+fig.update_mapboxes(row=1, col=1, style="open-street-map", center=dict(lat=36.5, lon=-119.5), zoom=4.5)
+
+# --- Correlation (r1c2)
+fig.add_heatmap(z=C0, x=corr_vars, y=corr_vars, zmin=-1, zmax=1, coloraxis="coloraxis", row=1, col=2)
+fig.update_layout(coloraxis=dict(colorscale="Blues", colorbar=dict(title="r")))
+
+# --- Regional lines (r2c1)
 for reg in regions:
-    sub = cm_region[cm_region["Region"]==reg].sort_values("_date")
-    fig_regions.add_trace(go.Scatter(x=sub["_date"], y=sub["NO2"], mode="lines+markers", name=reg))
-fig_regions.update_layout(height=FIG_H, margin=dict(l=5,r=5,t=30,b=0),
-                          xaxis_title="Month", yaxis_title="Concentration")
+    sub = rs0[rs0["Region"]==reg].sort_values("_date")
+    fig.add_scatter(x=sub["_date"], y=sub["NO2"], mode="lines+markers", name=reg, row=2, col=1)
 
-# 4) 3D surface
-Z, xmid, ymid = surface_dict[M]
-fig_surface = go.Figure(data=[go.Surface(z=Z, x=xmid, y=ymid, showscale=True)])
-fig_surface.update_layout(height=FIG_H, margin=dict(l=5,r=5,t=30,b=0),
-                          scene=dict(xaxis_title="NO₂", yaxis_title="CO", zaxis_title="Density"))
+# --- 3D surface (r2c2)
+fig.add_surface(z=Z0, x=x0, y=y0, showscale=True, row=2, col=2)
 
-# =========================
-# 2×2 GRID (no scrolling)
-# =========================
-col1, col2 = st.columns(2, gap="small")
-with col1:
-    st.subheader(f"Composite Index — Map  |  {M}")
-    st.plotly_chart(fig_map, use_container_width=True)
-with col2:
-    st.subheader("Correlation Heatmap")
-    st.plotly_chart(fig_corr, use_container_width=True)
+# Layout
+fig.update_layout(
+    height=880, margin=dict(l=10, r=10, t=60, b=10),
+    scene=dict(xaxis_title="NO₂", yaxis_title="CO", zaxis_title="Density"),  # surface axes
+    legend=dict(orientation="h", yanchor="bottom", y=0.02, xanchor="left", x=0.05),
+    title=dict(text=f"Month: {m0}", x=0.5, y=0.98)
+)
 
-col3, col4 = st.columns(2, gap="small")
-with col3:
-    st.subheader("Regional Trends (NO₂)")
-    st.plotly_chart(fig_regions, use_container_width=True)
-with col4:
-    st.subheader("3D Exposure Surface")
-    st.plotly_chart(fig_surface, use_container_width=True)
+# ---------------- Build frames (one per month) ----------------
+frames = []
+for m in months:
+    cm, C, rs, xmid, ymid, Z = per_month_tables(m)
 
-st.caption("One global timeline controls all charts. Play to auto-advance; move the slider to scrub months.")
+    data_frame = []
+
+    # Map (trace 0)
+    if len(cm):
+        data_frame.append(go.Scattermapbox(
+            lat=cm["lat"], lon=cm["lon"],
+            mode="markers",
+            marker=dict(size=cm["size"], color=cm["Composite"], colorscale="Blues"),
+            text=cm["County"],
+            customdata=np.c_[cm["NO2"], cm["CO"]],
+            hovertemplate="County=%{text}<br>NO₂=%{customdata[0]:.2f}<br>CO=%{customdata[1]:.2f}<extra></extra>",
+        ))
+    else:
+        data_frame.append(go.Scattermapbox(lat=[], lon=[]))
+
+    # Heatmap (trace 1)
+    data_frame.append(go.Heatmap(z=C, x=corr_vars, y=corr_vars, zmin=-1, zmax=1, coloraxis="coloraxis"))
+
+    # Regional lines (traces 2-4)
+    for reg in regions:
+        sub = rs[rs["Region"]==reg].sort_values("_date")
+        data_frame.append(go.Scatter(x=sub["_date"], y=sub["NO2"], mode="lines+markers", name=reg))
+
+    # Surface (trace 5)
+    data_frame.append(go.Surface(z=Z, x=xmid, y=ymid, showscale=True))
+
+    frames.append(go.Frame(name=m, data=data_frame, layout=go.Layout(title=dict(text=f"Month: {m}", x=0.5, y=0.98))))
+
+fig.frames = frames
+
+# Single Play/Pause + slider
+fig.update_layout(
+    updatemenus=[{
+        "type":"buttons",
+        "buttons":[
+            {"label":"Play","method":"animate",
+             "args":[None, {"fromcurrent":True, "frame":{"duration":600, "redraw":True}, "transition":{"duration":200}}]},
+            {"label":"Pause","method":"animate",
+             "args":[[None], {"mode":"immediate","frame":{"duration":0,"redraw":False},"transition":{"duration":0}}]}
+        ],
+        "x":0.02, "y":0.99, "xanchor":"left", "yanchor":"top"
+    }],
+    sliders=[{
+        "active":0, "x":0.12, "y":0.99, "len":0.76,
+        "currentvalue":{"prefix":"Month: "},
+        "pad":{"t":0, "b":0},
+        "steps":[{"args":[[m], {"frame":{"duration":0,"redraw":True}, "transition":{"duration":0}}],
+                  "label":m, "method":"animate"} for m in months]
+    }]
+)
+
+st.plotly_chart(fig, use_container_width=True)
