@@ -1,13 +1,9 @@
-
-
-Put your data in the repo as `California_NO2_CO_Combined.csv` or use the sidebar uploader.
-
 # 🌤️ California Air Quality — Animated Dashboard
 
-[![Streamlit](https://img.shields.io/badge/Streamlit-App-red?logo=streamlit)](https://simasadi-california-air-dashboard.streamlit.app)
-[![GitHub Pages](https://img.shields.io/badge/Live%20HTML-Dashboard-blue?logo=github)](https://simasadi.github.io/california-air-dashboard/California_Air_Dashboard.html)
+[![Streamlit](https://img.shields.io/badge/Streamlit-Live%20App-red?logo=streamlit)](https://california-air-dashboard-7rruzuvgrr3bwxqxjio7p6.streamlit.app/)
+[![GitHub Pages](https://img.shields.io/badge/Live%20HTML-Dashboard-blue?logo=github)](https://simasaadi.github.io/california-air-dashboard/California_Air_Dashboard_Scientific.html)
 
-Interactive and animated data visualizations from **California NO₂ & CO air quality monitoring data**.
+Interactive and animated data visualizations from **California NO₂ & CO air quality monitoring data**, created using **Streamlit + Plotly**.
 
 ---
 
@@ -15,7 +11,7 @@ Interactive and animated data visualizations from **California NO₂ & CO air qu
 1. **Composite Pollution Index** — monthly animated map (NO₂ + CO).  
 2. **Correlation Structure** — animated monthly heatmap.  
 3. **Regional Trends** — animated by region (North / Central / South).  
-4. **3D Exposure Surface** — NO₂ × CO density surface.
+4. **3D Exposure Surface** — NO₂ × CO density animation.
 
 ---
 
@@ -23,4 +19,3 @@ Interactive and animated data visualizations from **California NO₂ & CO air qu
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
-
